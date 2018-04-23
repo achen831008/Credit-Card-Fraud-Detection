@@ -1,0 +1,563 @@
+---
+title: "Credit Card Fraud Detection"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Everyday there are millions of credit card transactions, most of which are legitimate. An important function of banks and credit card companies is to protect clients from becoming victims of credit card fraud, and to do so, try to predict which transactions are fraudulent. The performance of the predictions measured by the accuracy on number of instances predicted correctly over the total number of instances. However, false negative rate is definitely one of the most crucial key performance indicators, as it is costly to predicting a fraudulent transaction as a legitimate transaction.
+
+One limitation of credit card analysis is the lack of available data, only a few datasets were available on Kaggle. The dataset “Credit Card Fraud Detection” is used for this project. This dataset consists of anonymized credit card transactions labeled as fraudulent or genuine under the column “Class”. 
+
+## Objective of the Analysis
+
+The objective of the analysis is to apply the techniques and models we have learned to the credit card dataset and compare them to see which model performs the best in identifying fraudulent transactions. The models we are comparing, based off our research, is the random forest (RF) model, support vector model (SVM), and generalized boosted model (GBM). Since this is a very unbalanced dataset, random undersampling was used to create a balanced dataset with 50-50 distribution on the Class (legitimate and fraudulent).
+
+## Research Questions
+
+1. What machine learning method will be the most effective at classifying transactions into the correct category?
+The metric used to answer this research question will be the accuracy rate which is defined as the percentage of transactions that was classified correctly. 
+
+2. Which machine learning method will be the best at detecting fraudulent transactions?
+The metric used to answer this research question will be the false negative rate which is defined as the percentage of fraudulent transactions that were classified as legitimate over the total number of transactions that were classified as legitimate. 
+
+## Data Files
+
+- Credit card transactions: [creditcard.csv](https://www.kaggle.com/mlg-ulb/creditcardfraud/data)
+
+## Statistical Learning Approaches Used
+
+- Random Forest
+- Support Vector Machine (SVM)
+- Gradient Boosting Machine (GBM)
+
+## Exploratory Data Analysis (EDA) and Data Pre-processing
+
+The dataset contains transactions made by credit cards in September 2013 by European cardholders. This dataset presents transactions with 492 frauds out of 284,807 transactions, which only account for 0.17% of all transactions. The dataset contains numeric input variables which are the result of a PCA transformation. Unfortunately, due to confidentiality issues, the original features about the data cannot be provided. 
+
+Features V1, V2, ...V28 are the principal components obtained with PCA, the only features which have not been transformed with PCA are 'Time' and 'Amount'. Feature 'Time' contains the seconds elapsed between each transaction and the first transaction in the dataset. The feature 'Amount' is the transaction Amount. Lastly, feature 'Class' is the response variable and it takes value 1 in case of fraud and 0 otherwise.
+
+**Read File**
+```{r message=FALSE, warning=FALSE}
+# set pwd
+setwd('/Users/alexchen/achen/Waterloo/Academic/4A/afm423/Project/')
+
+# library
+library(caret)
+library(corrplot)
+library(ellipse)
+library(e1071)
+library(psych)
+library(randomForest)
+library(tibble)
+library(knitr)
+
+# read csv
+creditcard <- read.csv('creditcard.csv')
+```
+
+**Size**
+```{r}
+sprintf("Rows: %d, Columns: %d",nrow(creditcard), length(names(creditcard)))
+```
+
+**View Dataset**
+```{r}
+head(creditcard)
+```
+
+**Statistics**
+```{r}
+describe(creditcard)
+```
+
+**Distribution for Response Variable**
+```{r}
+attach(creditcard)
+table(Class)
+```
+
+Class 0 (legitimate) has 284315 observations comparing to 492 observations of Class 1 (fraudulent).
+
+
+The following graph shows the frequency of class as it is highly imbalanced with 99.83% to 0.17%.
+
+```{r echo=FALSE}
+par(mar=c(1,1,1,1))
+barplot(table(Class),
+        main='Frequency of Class',
+        font.main=1,
+        ylim=c(0,300000),
+        fg='red',
+        border = 'NA',
+        yaxt='n',
+        col=c('gray','black'),
+        xlab = 'Class',
+        ylab = 'Count')
+
+axis(2,c(0,100000,200000,300000),labels=c('0',"10W","20W",'30W'),las=2)
+text(0.7,270000,'99.83%')
+text(1.9,20000,'0.17%')
+```
+
+Later, we will use random undersample method to fix this problem.
+
+**Correlation**
+```{r echo=FALSE}
+correlations = cor(creditcard, method="pearson")
+corrplot(correlations, number.cex = .9, method = "circle", type = "full", tl.cex=0.8,tl.col = "black")
+```
+
+- ‘Amount’ and ‘V2’ has a high negative correlation
+- ‘Amount’ and ‘V7 has a relatively high positive correlation
+- ‘Amount’ and ‘V20’ also has a relatively high positive correlation
+
+**Scatter Plot Matrix**
+```{r echo=FALSE}
+featurePlot(x = creditcard[, c("V1","V2","V3","V4")],
+            y = creditcard$Class,
+            plot = "ellipse",
+            auto.key = list(columns = 2))
+```
+
+This graph shows the data points for features ‘V1’ to ‘V4’ plotting against each other in a matrix. Two clear ellipses are formed for the data points in each class. We can see that each class distinguishes from each other.
+
+**Box Plot**
+```{r echo=FALSE}
+featurePlot(x = creditcard[, c("V1","V2","V3","V4")],
+                   y = creditcard$Class,
+                   plot = "box",
+                   scales = list(x = list(rot = 90), 
+                                 y = list(relation="free")),
+                   layout = c(4,1),
+                   auto.key = list(columns = 2))
+```
+
+The data distribution for features ‘V1’ to ‘V4’ in each class are different. We can see that there is a big different when comparing each class distribution.
+
+## Data Preparation
+```{r}
+# set seed
+set.seed(123456789)
+
+# undersampling
+creditcard$Class <- as.factor(creditcard$Class)
+class_0_idx = which(creditcard$Class == 0) # legitimate
+class_1_idx = which(creditcard$Class == 1) # fraudulent
+nsamp = length(class_1_idx) # 492 obs
+
+class_0_idx_under_sample = sample(class_0_idx, nsamp)
+creditcard_undersample = creditcard[c(class_0_idx_under_sample,class_1_idx), ]
+creditcard_undersample = creditcard_undersample[, -1]  # remove time column for training
+
+# split train and test data
+train_index = sample(1:nrow(creditcard_undersample), size = round(0.5 * nrow(creditcard_undersample)))
+creditcard_trn = creditcard_undersample[train_index, ]
+creditcard_tst = creditcard_undersample[-train_index, ]
+
+# split X and Y into a factor and a matrix
+trn_X = as.matrix(creditcard_trn[, -1])
+trn_y = as.factor(creditcard_trn$Class)
+```
+
+A seed of 123456789 will be used throughout the project. When undersampling, a random sample of 492 observations are draw from the legitimate transactions. A total of 984 observations (492 legitimate and 492 fraudulent) will be the new dataset, which will be used for training and testing predictive models for the project.
+
+**Undersample Data Visualization**
+```{r}
+attach(creditcard_undersample)
+table(Class)
+```
+
+```{r echo=FALSE}
+par(mar=c(1,1,1,1))
+barplot(table(Class),
+        main='Frequency of Class',
+        font.main=1,
+        ylim=c(0,1200),
+        fg='red',
+        border = 'NA',
+        yaxt='n',
+        col=c('blue','red'),
+        xlab = 'Class',
+        ylab = 'Count')
+axis(2,c(0,400,800,1200),labels=c('0',"10W","20W",'30W'),las=2)
+text(0.7,400,'Legitimate, 50%')
+text(1.9,400,'Fraudulent, 50%')
+```
+
+After undersampling, the graph shows the frequency of class with 50% to 50% equal distribution for each class.
+
+## Helper Functions
+
+There are three helper functions defined that will be used throughout the research.
+
+```{r}
+# Get the test classification accuracy 
+get_class_acc = function(model, data, response) {
+	mean(data[,response] == predict(model,data))
+}
+
+# Get the false negative rate
+get_false_negative_rate = function(model, data, response) {
+	cm = confusionMatrix(predict(model,data),data[,response])
+	fn = cm$table[1,2]
+	tp = cm$table[1,1]
+	fn/(tp+fn)
+}
+```
+
+
+
+
+## Models
+
+# I. Random Forest
+
+```{r}
+# random forest with tuning 1:10 
+# finding the best mtry with tune grid; best value: 5
+cc_rf_tuned = train(Class~., data=creditcard_trn, 
+                    trControl=trainControl(method="oob"),
+                    method = "rf", tuneGrid =expand.grid(mtry=1:10))
+```
+
+```{r echo=FALSE}
+# plotting accuracy and mtry values 
+plot(seq(1:10),cc_rf_tuned$results$Accuracy, main="Random Forest - Accuracy vs. Predictors (mtry=1:10)", xlab="Predictors", ylab="Accuracy")
+```
+
+```{r}
+# random forest with random tuned 
+cc_rf_random_tuned_tunelength10 = train(Class~., data=creditcard_trn, 
+                           trControl=trainControl(method="oob"),
+                           method = "rf", tuneLength = 10)
+```
+
+```{r echo=FALSE}
+# plotting accuracy and mtry values 
+plot(seq(1:10), cc_rf_random_tuned_tunelength10$results$Accuracy, main="Random Forest (random tune) - Accuracy vs. Predictors", xlab="Predictors", ylab="Accuracy")
+```
+
+The figure on the left is the random forest training model with mtry from 1 to 10. The best predictor is 5. The figure on the right is the random forest training model with random tune, which shows best predictor to be 2.
+
+```{r}
+#   Type of random forest: classification
+#   Number of trees: 500
+#   No. of variables tried at each split: 5
+#   SQRT(30)=5.4
+
+cc_rf = randomForest(Class~., 
+                     data=creditcard_trn,
+                     mtry = 5, 
+                     importance = TRUE, 
+                     ntrees = 500)
+```
+
+```{r echo=FALSE}
+plot(cc_rf, main="Random Forest (OOB) - Error Rate to Number of Trees")
+```
+
+This is the error rate compared to the number of trees generated. Interestingly, the lowest error rate is about 0.07 between 0-50 trees, lower than the average approximately 0.08 that is in the range of the 100-500 trees.
+
+```{r}
+# predicting with the test data 
+cc_rf_tst_pred = predict(cc_rf, newdata = creditcard_tst)
+```
+
+```{r echo=FALSE}
+# plotting the predictions 
+plot(cc_rf_tst_pred, creditcard_tst$Class, xlab="Predicted",ylab="Actual", main="Predicted vs. Actual: Random Forest, Test Data", col="dodgerblue", pch=20)
+```
+
+Predicted to actual classifications on test data. This model appears to have good accuracy.
+
+```{r}
+# random forest with CV
+cc_rf_cv = train(Class~., data=creditcard_trn, trControl=trainControl(method="cv",number=10), method="rf", tuneLength=10)
+```
+
+```{r echo=FALSE}
+plot(cc_rf_cv, main="Random Forest (CV) - Accuracy vs. Predictors")
+```
+
+Random forest with cross validation accuracy and predictors comparison. It seems that for cross validation the best number of predictors is approximately 7.
+
+```{r}
+# making list of models 
+model_list = list(cc_rf_tuned, cc_rf_random_tuned_tunelength10, cc_rf_cv)
+
+# Get Test Accuracy
+test_rmse = sapply(model_list, get_class_acc, data = creditcard_tst, response = "Class")
+fnr = sapply(model_list, get_false_negative_rate, data = creditcard_tst, response = "Class")
+results = data.frame(
+	titles = c("cc_rf_tuned",
+		"cc_rf_random_tuned_tunelength10",
+		"cc_rf_cv"),
+	test_rmse,
+	fnr
+)
+
+colnames(results) = c("model", "test accuracy","false negative rate")
+knitr::kable(results, escape = FALSE, booktabs = TRUE)
+```
+
+From the test accuracies, cc_rf_tuned has the greatest test accuracy and lowest false negative rate, which makes it the most accurate model of the three. The tune for cf_rf_tuned is 5.
+
+
+
+
+# II. SVM
+10 fold cross validation is used to help train the svm model to generalize better.
+
+```{r}
+# Setting up the train control for SVM
+trnCtrl = trainControl(method="cv",number = 10)
+
+# SVM with linear kernel before preprocessing
+svm_linear = train(Class ~.,
+	data = creditcard_trn,
+	method = "svmLinear",
+	trControl = trnCtrl,
+	tuneGrid = expand.grid(C = c(2 ^ (-2:5))))
+
+# SVM with linear kernel after preprocessing
+svm_linear_preprocess = train(Class ~ .,
+	data = creditcard_trn,
+	method = "svmLinear",
+	trControl=trnCtrl,
+	preProcess = c("center","scale"),
+	tuneGrid = expand.grid(C = c(2 ^ (-2:5))))
+
+```
+
+Using a linear kernel with SVM where the tune grid has varying values for the cost.
+
+```{r echo=FALSE}
+plot(svm_linear, main="SVM Linear")
+```
+
+Graph shows the relationship between cost and accuracy for a SVM model with a linear kernel and no preprocessing of data. The highest accuracy happens at the lowest cost.
+
+```{r echo=FALSE}
+plot(svm_linear_preprocess, main="SVM Linear Pre Process")
+```
+
+Graph shows the relationship between cost and accuracy for a SVM model with a linear kernel and preprocessing of data. The highest accuracy happens at the second lowest cost of 0.5.
+
+```{r}
+# SVM with radial kernel before preprocessing
+svm_radial = train(Class ~ .,
+	data = creditcard_trn,
+	method = "svmRadial",
+	trControl=trnCtrl,
+	tuneLength = 10)
+
+# SVM with a radial kernel after preprocessing
+svm_radial_preprocess = train(Class ~ .,
+	data = creditcard_trn,
+	method = "svmRadial",
+	trControl = trnCtrl,
+	preProcess = c("center", "scale"),
+	tuneLength = 10)
+```
+
+Using a radial kernel with SVM. The ‘tuneLength’ parameter specifies the total number of tuning parameters used.
+
+```{r echo=FALSE}
+plot(svm_radial, main = "SVM Radial")
+```
+
+Graph shows the relationship between cost and accuracy for a SVM model with a radial kernel and no preprocessing of data. Best accuracy happens at a cost of 2.
+
+```{r echo=FALSE}
+plot(svm_radial_preprocess, main = "SVM Radial Pre Process")
+```
+
+Graph shows the relationship between cost and accuracy for a SVM model with a radial kernel and preprocessing of data. Best accuracy happens at a cost of 2.
+
+```{r}
+# SVM with a polynomial kernel before preprocessing
+svm_poly = train(Class ~ .,
+	data = creditcard_trn,
+	method = "svmPoly",
+	trControl = trnCtrl,
+	tuneLength = 5)
+
+# SVM with a polynomial kernel after preprocessing
+svm_poly_preprocess = train(Class ~ .,
+	data = creditcard_trn,
+	method = "svmPoly",
+	trControl = trnCtrl,
+	preProcess = c("center", "scale"),
+	tuneLength = 5)
+```
+
+Use a polynomial kernel with SVM. The ‘tunelength’ parameter specifies the number of tuning parameters used.
+
+
+```{r echo=FALSE}
+plot(svm_poly, main = "SVM Polynomial")
+```
+
+Graph shows the relationship between tuning parameters (cost, degree, and scale) for a SVM model with a polynomial kernel and no preprocessing of data.
+
+```{r echo=FALSE}
+plot(svm_poly_preprocess, main = "SVM Polynomial Pre Process")
+```
+
+Graph shows the relationship between tuning parameters (cost, degree, and scale) for a SVM model with a polynomial kernel and preprocessing of data.
+
+```{r}
+# SVM with weighted costs (emphasize on fraudulent transactions)
+costs = table(creditcard_trn$Class)
+# Legitimate transactions
+costs[1] = 1
+# Fraudulent transactions
+costs[2] = 1e10
+svm_weighted_cost = svm(Class ~ .,
+                        data = creditcard_trn,
+                        type = 'C-classification',
+                        kernel = 'polynomial',
+                        class.weights=costs,
+                        degree = 1,
+                        scale=FALSE,
+                        cross = 10)
+```
+
+The weighted cost tries to put an emphasis on fraudulent transactions to decrease the false negative rate. 
+
+```{r}
+# Creating a list of trained models
+model_list = list(svm_linear,
+	svm_linear_preprocess,
+	svm_radial,
+	svm_radial_preprocess,
+	svm_poly,
+	svm_poly_preprocess,
+	svm_weighted_cost)
+
+# Getting test accuracy
+test_rmse = sapply(model_list, get_class_acc, data = creditcard_tst, response = "Class")
+fnr = sapply(model_list, get_false_negative_rate, data = creditcard_tst, response = "Class")
+results = data.frame(
+	titles = c("svm linear",
+		"svm linear (preprocess)",
+		"svm radial",
+		"svm radial (preprocess)",
+		"svm poly",
+		"svm poly (preprocess)",
+		"svm poly weighted cost"),
+	test_rmse,
+	fnr
+)
+colnames(results) = c("model", "test accuracy","false negative rate")
+knitr::kable(results, escape = FALSE, booktabs = TRUE)
+```
+
+This creates a nice table that contains the test accuracy (answer to research question 1) and false negative rate (answer to research question 2) for each SVM model that was generated.
+
+The best performing kernel in terms of accuracy was the linear kernel or the polynomial kernel with a degree of 1 (which is essentially a linear kernel) and no preprocessing of data. The best performing kernel had an accuracy of 91.26% and a 13.38% false negative rate. Both the accuracy and the false negative rate are the highest when compared to all other SVM models without a weighted class cost. When giving a higher cost weight to fraudulent transactions, the accuracy slightly decreases to 87.60%, but the false negative rate also decreases to 9.13%. If false negative rate is determined to be more important than accuracy metrics, then the SVM with a weighted class cost should be used.
+
+
+
+
+# III. GBM
+
+```{r}
+# Setting up the tune grid for the GBM model
+gbm_grid = expand.grid(interaction.depth = 1:5,
+                       n.trees = (1:30) * 100, 
+                       shrinkage = c(0.001, 0.1, 0.5),     
+                       n.minobsinnode = 10) 
+
+# GBM Model
+creditcard_gbm_mod = train(   
+  	Class ~ .,   
+  	data = creditcard_trn,   
+  	trControl = trainControl(method="cv",number = 5),   
+  	method = "gbm",   
+  	tuneGrid = gbm_grid,    
+  	verbose = FALSE )
+
+# GBM Model with preprocessing
+creditcard_gbm_mod_preprocess = train(   
+  	Class ~ .,   
+  	data = creditcard_trn,   
+  	trControl = trainControl(method="cv",number = 5),   
+  	method = "gbm",   
+  	tuneGrid = gbm_grid,
+  	preProcess = c("center","scale"),    
+  	verbose = FALSE )
+```
+
+Training Two GBM Model with and without preprocessing.
+
+**Relative influence with tune grid**
+```{r echo=FALSE}
+# Relative Influence
+tibble::as_tibble(summary(creditcard_gbm_mod))
+```
+
+Graph shows the relative influence of the data provided for creditcard.csv. From the chart V14 has the highest relative influence.
+
+**GBM Result Summary**
+```{r echo=FALSE}
+# GBM Summary
+plot(creditcard_gbm_mod)
+```
+
+Graph shows the relationship between iterations and accuracy for a GBM model. Best accuracy happens with a shrinkage of 0.100 and 1500 iterations.
+
+**GBM with Preprocessing Result Summary**
+```{r echo=FALSE}
+# GBM Summary
+plot(creditcard_gbm_mod_preprocess)
+```
+
+Graph shows the relationship between iterations and accuracy for a GBM model with preprocessing. Best accuracy happens with a shrinkage of 0.100 and 1500 iterations.
+
+```{r}
+# Creating a list of trained models
+model_list = list(creditcard_gbm_mod, creditcard_gbm_mod_preprocess)
+
+# Getting test accuracy
+test_rmse = sapply(model_list, get_class_acc, data = creditcard_tst, response = "Class")
+fnr = sapply(model_list, get_false_negative_rate, data = creditcard_tst, response = "Class")
+results = data.frame(
+	titles = c("gbm_mod","gbm_mod_preprocess"),
+	test_rmse,
+	fnr
+)
+
+colnames(results) = c("model", "test accuracy","false negative rate")
+knitr::kable(results, escape = FALSE, booktabs = TRUE)
+```
+
+Table that contains the test accuracy (answer to research question 1) and false negative rate (answer to research question 2) for each GBM model that was generated.
+
+## Conclusion
+
+```{r echo=FALSE, results='asis'}
+results = data.frame(
+	models = c("RF Tuned","RF Tunelength10", "RF Cross Validation",
+	           "SVM Linear","SVM Linear (Preprocess)","SVM Radial",
+	           "SVM Radial (Preprocess)","SVM Poly","SVM Poly (Preprocess)",
+	           "SVM Poly Weighted Cost","GBM","GBM with Scaling"),
+	test_rmse = c("0.9146341","0.9105691","0.9085366","0.9126016",
+	              "0.9105691","0.9085366","0.9085366","0.9126016",
+	              "0.9105691","0.8760163","0.9024390","0.9085366"),
+	fnr = c("0.1333333","0.1370370","0.1375465","0.1338290","0.1343284",
+	        "0.1375465","0.1375465","0.1338290","0.1370370","0.0913242",
+	        "0.1160000","0.1052632")
+)
+
+colnames(results) = c("Model", "Test Accuracy","False Negative Rate")
+knitr::kable(results, escape = FALSE, booktabs = TRUE)
+```
+
+Based on the result generated by various models, **Random Forest Tuned** is the best model at classifying credit card transactions into the correct classes with an accuracy of 91.5%.
+
+On the other hand, **SVM Poly Weighted Cost** is the best model at detecting fraudulent credit card transaction by monitoring false negative rate. It has a false negative rate of 9.1% and an accuracy of 87.6%.
+
